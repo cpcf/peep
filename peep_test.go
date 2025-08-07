@@ -22,8 +22,8 @@ func main() {
 `
 	tempDir := t.TempDir()
 	testFile := filepath.Join(tempDir, "test.go")
-	
-	err := os.WriteFile(testFile, []byte(content), 0644)
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
@@ -51,8 +51,8 @@ func helper() {
 `
 	tempDir := t.TempDir()
 	testFile := filepath.Join(tempDir, "test.go")
-	
-	err := os.WriteFile(testFile, []byte(content), 0644)
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
@@ -79,8 +79,8 @@ func main() {
 `
 	tempDir := t.TempDir()
 	testFile := filepath.Join(tempDir, "test.go")
-	
-	err := os.WriteFile(testFile, []byte(content), 0644)
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
@@ -93,7 +93,7 @@ func main() {
 
 	// Test adding a new import
 	addImportIfMissing(fset, node, "os")
-	
+
 	// Verify the import was added
 	found := false
 	for _, imp := range node.Imports {
@@ -116,18 +116,18 @@ func main() {
 
 func TestGenerateUniqueVars(t *testing.T) {
 	// Test that we can generate unique variable names
-	var seen = make(map[string]bool)
-	
+	seen := make(map[string]bool)
+
 	for range 100 {
 		fileVar, errVar := generateUniqueVars()
-		
+
 		if seen[fileVar] {
 			t.Errorf("Generated duplicate file variable: %s", fileVar)
 		}
 		if seen[errVar] {
 			t.Errorf("Generated duplicate error variable: %s", errVar)
 		}
-		
+
 		// Verify expected format
 		if !strings.HasPrefix(fileVar, "f_") {
 			t.Errorf("File variable should start with 'f_', got: %s", fileVar)
@@ -135,7 +135,7 @@ func TestGenerateUniqueVars(t *testing.T) {
 		if !strings.HasPrefix(errVar, "err_") {
 			t.Errorf("Error variable should start with 'err_', got: %s", errVar)
 		}
-		
+
 		seen[fileVar] = true
 		seen[errVar] = true
 	}
@@ -153,21 +153,22 @@ func main() {
 
 	tempDir := t.TempDir()
 	testFile := filepath.Join(tempDir, "test.go")
-	
-	err := os.WriteFile(testFile, []byte(content), 0644)
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
 	// Process the file to get instrumented AST
-	profileFile := filepath.Join(tempDir, "test.prof")
-	node, fset, err := processGoFile(testFile, profileFile)
+	cpuProfileFile := filepath.Join(tempDir, "test_cpu.prof")
+	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
+	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, false)
 	if err != nil {
 		t.Fatalf("Failed to process Go file: %v", err)
 	}
 
 	// Test writeAndExecute without web UI
-	err = writeAndExecute(node, fset, profileFile, false)
+	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, false)
 	if err != nil {
 		t.Fatalf("writeAndExecute failed: %v", err)
 	}
@@ -177,16 +178,16 @@ func main() {
 
 	// The profile file should be created in the working directory of the executed program
 	// which is the same as our test directory
-	if _, err := os.Stat(profileFile); os.IsNotExist(err) {
+	if _, err := os.Stat(cpuProfileFile); os.IsNotExist(err) {
 		// Check if it was created in current directory instead
-		currentDirProfile := "test.prof"
+		currentDirProfile := "test_cpu.prof"
 		if _, err := os.Stat(currentDirProfile); os.IsNotExist(err) {
-			t.Error("Expected profile file to be created")
+			t.Error("Expected CPU profile file to be created")
 		} else {
 			os.Remove(currentDirProfile) // cleanup
 		}
 	} else {
-		os.Remove(profileFile) // cleanup
+		os.Remove(cpuProfileFile) // cleanup
 	}
 }
 
@@ -200,14 +201,14 @@ func main() {
 
 	tempDir := t.TempDir()
 	testFile := filepath.Join(tempDir, "invalid.go")
-	
-	err := os.WriteFile(testFile, []byte(content), 0644)
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
 	// This should fail during parsing
-	_, _, err = processGoFile(testFile, "test.prof")
+	_, _, err = processGoFile(testFile, "test_cpu.prof", "test_mem.prof", true, false)
 	if err == nil {
 		t.Error("Expected error when processing invalid Go code")
 	}
@@ -224,14 +225,14 @@ func main() {
 `
 	tempDir := t.TempDir()
 	testFile := filepath.Join(tempDir, "test.go")
-	
-	err := os.WriteFile(testFile, []byte(content), 0644)
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
 	// Test processing a valid Go file
-	node, fset, err := processGoFile(testFile, "test.prof")
+	node, fset, err := processGoFile(testFile, "test_cpu.prof", "test_mem.prof", true, false)
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -265,15 +266,124 @@ func helper() {
 `
 	tempDir := t.TempDir()
 	testFile := filepath.Join(tempDir, "test.go")
-	
-	err := os.WriteFile(testFile, []byte(content), 0644)
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
 	// Test processing file without main function should error
-	_, _, err = processGoFile(testFile, "test.prof")
+	_, _, err = processGoFile(testFile, "test_cpu.prof", "test_mem.prof", true, false)
 	if err == nil {
 		t.Error("Expected error for file without main function")
+	}
+}
+
+func TestMemoryProfilingOnly(t *testing.T) {
+	content := `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("test output")
+}`
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.go")
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Process the file with memory profiling only
+	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
+	node, fset, err := processGoFile(testFile, "", memProfileFile, false, true)
+	if err != nil {
+		t.Fatalf("Failed to process Go file: %v", err)
+	}
+
+	// Test writeAndExecute with memory profiling only
+	err = writeAndExecute(node, fset, "", memProfileFile, false, false, true)
+	if err != nil {
+		t.Fatalf("writeAndExecute failed: %v", err)
+	}
+
+	// Wait a moment for file to be written
+	time.Sleep(200 * time.Millisecond)
+
+	// Check that memory profile file was created
+	if _, err := os.Stat(memProfileFile); os.IsNotExist(err) {
+		// Check if it was created in current directory instead
+		currentDirProfile := "test_mem.prof"
+		if _, err := os.Stat(currentDirProfile); os.IsNotExist(err) {
+			t.Error("Expected memory profile file to be created")
+		} else {
+			os.Remove(currentDirProfile) // cleanup
+		}
+	} else {
+		os.Remove(memProfileFile) // cleanup
+	}
+}
+
+func TestBothCPUAndMemoryProfiling(t *testing.T) {
+	content := `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("test output")
+}`
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.go")
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Process the file with both CPU and memory profiling
+	cpuProfileFile := filepath.Join(tempDir, "test_cpu.prof")
+	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
+	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, true)
+	if err != nil {
+		t.Fatalf("Failed to process Go file: %v", err)
+	}
+
+	// Test writeAndExecute with both profiling types
+	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, true)
+	if err != nil {
+		t.Fatalf("writeAndExecute failed: %v", err)
+	}
+
+	// Wait a moment for files to be written
+	time.Sleep(200 * time.Millisecond)
+
+	// Check that both profile files were created
+	cpuExists := false
+	memExists := false
+
+	if _, err := os.Stat(cpuProfileFile); err == nil {
+		cpuExists = true
+		os.Remove(cpuProfileFile) // cleanup
+	} else if _, err := os.Stat("test_cpu.prof"); err == nil {
+		cpuExists = true
+		os.Remove("test_cpu.prof") // cleanup
+	}
+
+	if _, err := os.Stat(memProfileFile); err == nil {
+		memExists = true
+		os.Remove(memProfileFile) // cleanup
+	} else if _, err := os.Stat("test_mem.prof"); err == nil {
+		memExists = true
+		os.Remove("test_mem.prof") // cleanup
+	}
+
+	if !cpuExists {
+		t.Error("Expected CPU profile file to be created")
+	}
+	if !memExists {
+		t.Error("Expected memory profile file to be created")
 	}
 }
