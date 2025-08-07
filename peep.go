@@ -17,65 +17,40 @@ import (
 	"golang.org/x/tools/go/ast/astutil"
 )
 
-func main() {
-	var web bool
-	var profileFile string
-	flag.BoolVar(&web, "web", false, "Open pprof web UI after execution")
-	flag.StringVar(&profileFile, "o", "cpu.prof", "Output profile file name")
-	flag.Parse()
-
-	if flag.NArg() != 1 {
-		fmt.Println("Usage: prof [--web] <main.go>")
-		os.Exit(1)
-	}
-
-	sourceFile := flag.Arg(0)
-	fset := token.NewFileSet()
-
-	node, err := parser.ParseFile(fset, sourceFile, nil, parser.ParseComments)
-	if err != nil {
-		log.Fatalf("Failed to parse %s: %v", sourceFile, err)
-	}
-
-	// Inject imports if not present
-	addImport := func(pkg string) {
-		found := false
-		for _, imp := range node.Imports {
-			if imp.Path.Value == fmt.Sprintf("\"%s\"", pkg) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			astutil.AddImport(fset, node, pkg)
-		}
-	}
-
-	addImport("os")
-	addImport("log")
-	addImport("runtime/pprof")
-
-	// Check if main function exists
-	var hasMain bool
-	ast.Inspect(node, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if ok && fn.Name.Name == "main" && fn.Recv == nil {
-			hasMain = true
-		}
-		return true
-	})
-
-	if !hasMain {
-		log.Fatalf("No main function found in %s", sourceFile)
-	}
-
-	// Generate unique variable names
+// generateUniqueVars creates unique variable names to avoid conflicts
+func generateUniqueVars() (string, string) {
 	var randBytes [4]byte
 	rand.Read(randBytes[:])
 	suffix := hex.EncodeToString(randBytes[:])
-	fileVar := "f_" + suffix
-	errVar := "err_" + suffix
+	return "f_" + suffix, "err_" + suffix
+}
 
+// hasMainFunction checks if the AST contains a main function
+func hasMainFunction(node *ast.File) bool {
+	var found bool
+	ast.Inspect(node, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if ok && fn.Name.Name == "main" && fn.Recv == nil {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// addImportIfMissing adds an import to the AST if it's not already present
+func addImportIfMissing(fset *token.FileSet, node *ast.File, pkg string) {
+	for _, imp := range node.Imports {
+		if imp.Path.Value == fmt.Sprintf("\"%s\"", pkg) {
+			return
+		}
+	}
+	astutil.AddImport(fset, node, pkg)
+}
+
+// instrumentMainFunction injects profiling code into the main function
+func instrumentMainFunction(node *ast.File, profileFile, fileVar, errVar string) {
 	ast.Inspect(node, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
 		if ok && fn.Name.Name == "main" && fn.Recv == nil {
@@ -150,18 +125,45 @@ func main() {
 		}
 		return true
 	})
+}
 
+// processGoFile instruments a Go file with profiling code
+func processGoFile(sourceFile, profileFile string) (*ast.File, *token.FileSet, error) {
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, sourceFile, nil, parser.ParseComments)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse %s: %w", sourceFile, err)
+	}
+
+	if !hasMainFunction(node) {
+		return nil, nil, fmt.Errorf("no main function found in %s", sourceFile)
+	}
+
+	// Add required imports
+	addImportIfMissing(fset, node, "os")
+	addImportIfMissing(fset, node, "log")
+	addImportIfMissing(fset, node, "runtime/pprof")
+
+	// Generate unique variable names and instrument
+	fileVar, errVar := generateUniqueVars()
+	instrumentMainFunction(node, profileFile, fileVar, errVar)
+
+	return node, fset, nil
+}
+
+// writeAndExecute writes the instrumented AST to a temp file and executes it
+func writeAndExecute(node *ast.File, fset *token.FileSet, profileFile string, web bool) error {
 	// Write modified file to temp
 	tempFile := filepath.Join(os.TempDir(), "main_prof.go")
 	out, err := os.Create(tempFile)
 	if err != nil {
-		log.Fatalf("Failed to create temp file: %v", err)
+		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer out.Close()
 	defer os.Remove(tempFile)
 
 	if err := printer.Fprint(out, fset, node); err != nil {
-		log.Fatalf("Failed to write modified code: %v", err)
+		return fmt.Errorf("failed to write modified code: %w", err)
 	}
 
 	// Run the instrumented file
@@ -173,7 +175,7 @@ func main() {
 
 	fmt.Println("[prof] Running instrumented program...")
 	if err := cmd.Run(); err != nil {
-		log.Fatalf("Execution failed: %v", err)
+		return fmt.Errorf("execution failed: %w", err)
 	}
 
 	fmt.Printf("[prof] CPU profile saved to %s\n", profileFile)
@@ -185,7 +187,34 @@ func main() {
 		webCmd.Stdout = os.Stdout
 		webCmd.Stderr = os.Stderr
 		if err := webCmd.Run(); err != nil {
-			log.Fatalf("Failed to launch pprof web UI: %v", err)
+			return fmt.Errorf("failed to launch pprof web UI: %w", err)
 		}
+	}
+	return nil
+}
+
+func main() {
+	var web bool
+	var profileFile string
+	flag.BoolVar(&web, "web", false, "Open pprof web UI after execution")
+	flag.StringVar(&profileFile, "o", "cpu.prof", "Output profile file name")
+	flag.Parse()
+
+	if flag.NArg() != 1 {
+		fmt.Println("Usage: prof [--web] <main.go>")
+		os.Exit(1)
+	}
+
+	sourceFile := flag.Arg(0)
+
+	// Process the Go file
+	node, fset, err := processGoFile(sourceFile, profileFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Write and execute the instrumented file
+	if err := writeAndExecute(node, fset, profileFile, web); err != nil {
+		log.Fatal(err)
 	}
 }
