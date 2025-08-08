@@ -19,8 +19,6 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "net/http/pprof"
-
 	"golang.org/x/tools/go/ast/astutil"
 )
 
@@ -574,7 +572,7 @@ func startDashboardServer(ctx context.Context, port string) {
 	server := &http.Server{Addr: addr}
 
 	go func() {
-		log.Printf("[prof] Live dashboard server listening on %s (pprof at %s/debug/pprof/)\n", addr, addr)
+		log.Printf("[prof] Live dashboard server listening on %s\n", addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
@@ -622,7 +620,6 @@ func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile strin
 		// Give the dashboard time to start
 		time.Sleep(1 * time.Second)
 		fmt.Printf("[prof] Dashboard available at http://localhost:%s\n", port)
-		fmt.Printf("[prof] pprof available at http://localhost:%s/debug/pprof/\n", port)
 	}
 
 	// Run the instrumented file

@@ -43,4 +43,4 @@ peep -cpu-out mycpu.prof -mem-out mymem.prof main.go
 
 peep parses your Go source code and automatically injects profiling code into the main function, then runs the instrumented program. Profile files are generated during execution.
 
-With `-dash`, a live dashboard runs at `http://localhost:6060` showing real-time metrics, and a pprof web API is available at `http://localhost:6060/debug/pprof/`.
+With `-dash`, a live dashboard runs at `http://localhost:6060` showing real-time metrics.
