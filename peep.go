@@ -531,7 +531,7 @@ func processGoFile(sourceFile, cpuFile, memFile string, enableCPU, enableMem, en
 }
 
 // startDashboardServer starts the live dashboard server
-func startDashboardServer(ctx context.Context) {
+func startDashboardServer(ctx context.Context, port string) {
 	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		// Read metrics from the file written by target process
 		data, err := os.ReadFile("peep_metrics.json")
@@ -570,7 +570,7 @@ func startDashboardServer(ctx context.Context) {
 	// Serve static dashboard from ./static
 	http.Handle("/", http.FileServer(http.Dir("./static")))
 
-	addr := ":6060"
+	addr := ":" + port
 	server := &http.Server{Addr: addr}
 
 	go func() {
@@ -588,7 +588,12 @@ func startDashboardServer(ctx context.Context) {
 }
 
 // writeAndExecute writes the instrumented AST to a temp file and executes it
-func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile string, web bool, enableCPU, enableMem bool) error {
+func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile string, web bool, enableCPU, enableMem bool, port string) error {
+	// Check for nil input
+	if node == nil {
+		return fmt.Errorf("cannot write nil AST")
+	}
+
 	// Write modified file to temp
 	tempFile := filepath.Join(os.TempDir(), "main_prof.go")
 	out, err := os.Create(tempFile)
@@ -611,13 +616,13 @@ func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile strin
 		defer dashboardStop()
 
 		go func() {
-			startDashboardServer(dashboardCtx)
+			startDashboardServer(dashboardCtx, port)
 		}()
 
 		// Give the dashboard time to start
 		time.Sleep(1 * time.Second)
-		fmt.Println("[prof] Dashboard available at http://localhost:6060")
-		fmt.Println("[prof] pprof available at http://localhost:6060/debug/pprof/")
+		fmt.Printf("[prof] Dashboard available at http://localhost:%s\n", port)
+		fmt.Printf("[prof] pprof available at http://localhost:%s/debug/pprof/\n", port)
 	}
 
 	// Run the instrumented file
@@ -649,7 +654,7 @@ func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile strin
 
 	// Keep dashboard running after program completion if requested
 	if web {
-		fmt.Println("[prof] Program completed. Dashboard still running at http://localhost:6060")
+		fmt.Printf("[prof] Program completed. Dashboard still running at http://localhost:%s\n", port)
 		fmt.Println("[prof] Press Ctrl+C to stop the dashboard server")
 		<-dashboardCtx.Done()
 		fmt.Println("[prof] Dashboard server stopped")
@@ -658,20 +663,24 @@ func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile strin
 }
 
 func main() {
-	var web bool
+	var dash bool
+	var port string
 	var cpuOutFile string
 	var memOutFile string
 	var memOnly bool
 	var cpuOnly bool
-	flag.BoolVar(&web, "web", false, "Open pprof web UI after execution")
+	flag.BoolVar(&dash, "dash", false, "Enable web dashboard")
+	flag.StringVar(&port, "port", "6060", "Port for web dashboard")
 	flag.StringVar(&cpuOutFile, "cpu-out", "", "Output file for CPU profile")
 	flag.StringVar(&memOutFile, "mem-out", "", "Output file for memory profile")
 	flag.BoolVar(&memOnly, "mem", false, "Enable memory profiling (use alone for memory-only)")
 	flag.BoolVar(&cpuOnly, "cpu", false, "Enable CPU profiling (use alone for CPU-only)")
 	flag.Parse()
 
+	web := dash
+
 	if flag.NArg() != 1 {
-		fmt.Println("Usage: peep [--web] [--mem] [--cpu] [--cpu-out file] [--mem-out file] <main.go>")
+		fmt.Println("Usage: peep [-mem] [-cpu] [-cpu-out file] [-mem-out file] [-dash] [-port port] <main.go>")
 		os.Exit(1)
 	}
 
@@ -696,7 +705,7 @@ func main() {
 	}
 
 	// Write and execute the instrumented file
-	if err := writeAndExecute(node, fset, cpuOutFile, memOutFile, web, enableCPU, enableMem); err != nil {
+	if err := writeAndExecute(node, fset, cpuOutFile, memOutFile, web, enableCPU, enableMem, port); err != nil {
 		log.Fatal(err)
 	}
 }
