@@ -162,7 +162,7 @@ func main() {
 	// Process the file to get instrumented AST
 	cpuProfileFile := filepath.Join(tempDir, "test_cpu.prof")
 	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
-	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, false)
+	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, false, false)
 	if err != nil {
 		t.Fatalf("Failed to process Go file: %v", err)
 	}
@@ -208,7 +208,7 @@ func main() {
 	}
 
 	// This should fail during parsing
-	_, _, err = processGoFile(testFile, "test_cpu.prof", "test_mem.prof", true, false)
+	_, _, err = processGoFile(testFile, "test_cpu.prof", "test_mem.prof", true, false, false)
 	if err == nil {
 		t.Error("Expected error when processing invalid Go code")
 	}
@@ -232,7 +232,7 @@ func main() {
 	}
 
 	// Test processing a valid Go file
-	node, fset, err := processGoFile(testFile, "test_cpu.prof", "test_mem.prof", true, false)
+	node, fset, err := processGoFile(testFile, "test_cpu.prof", "test_mem.prof", true, false, false)
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -273,7 +273,7 @@ func helper() {
 	}
 
 	// Test processing file without main function should error
-	_, _, err = processGoFile(testFile, "test_cpu.prof", "test_mem.prof", true, false)
+	_, _, err = processGoFile(testFile, "test_cpu.prof", "test_mem.prof", true, false, false)
 	if err == nil {
 		t.Error("Expected error for file without main function")
 	}
@@ -298,7 +298,7 @@ func main() {
 
 	// Process the file with memory profiling only
 	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
-	node, fset, err := processGoFile(testFile, "", memProfileFile, false, true)
+	node, fset, err := processGoFile(testFile, "", memProfileFile, false, true, false)
 	if err != nil {
 		t.Fatalf("Failed to process Go file: %v", err)
 	}
@@ -346,7 +346,7 @@ func main() {
 	// Process the file with both CPU and memory profiling
 	cpuProfileFile := filepath.Join(tempDir, "test_cpu.prof")
 	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
-	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, true)
+	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, true, false)
 	if err != nil {
 		t.Fatalf("Failed to process Go file: %v", err)
 	}
