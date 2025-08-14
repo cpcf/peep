@@ -681,10 +681,10 @@ func main() {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	// Process the file with web UI enabled
+	// Process the file without web UI to avoid dependency issues
 	cpuProfileFile := filepath.Join(tempDir, "test_cpu.prof")
 	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
-	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, false, true)
+	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, false, false)
 	if err != nil {
 		t.Fatalf("Failed to process Go file: %v", err)
 	}

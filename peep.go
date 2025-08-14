@@ -599,7 +599,6 @@ func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile strin
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer out.Close()
-	defer os.Remove(tempFile)
 
 	if err := printer.Fprint(out, fset, node); err != nil {
 		return fmt.Errorf("failed to write modified code: %w", err)
@@ -656,6 +655,224 @@ func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile strin
 		<-dashboardCtx.Done()
 		fmt.Println("[prof] Dashboard server stopped")
 	}
+
+	// Clean up temp file after execution is complete
+	os.Remove(tempFile)
+	return nil
+}
+
+// PackageInfo holds information about a Go package
+type PackageInfo struct {
+	Name     string   `json:"Name"`
+	Dir      string   `json:"Dir"`
+	GoFiles  []string `json:"GoFiles"`
+	CgoFiles []string `json:"CgoFiles"`
+}
+
+// discoverPackage discovers package information using go list
+func discoverPackage(dir string) (*PackageInfo, error) {
+	// Get absolute path
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	// Run go list from the package directory
+	cmd := exec.Command("go", "list", "-json", ".")
+	cmd.Dir = absDir
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("go list failed: %s\nHint: run from module root or specify a correct path", string(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("failed to run go list: %w", err)
+	}
+
+	var pkgInfo PackageInfo
+	if err := json.Unmarshal(output, &pkgInfo); err != nil {
+		return nil, fmt.Errorf("failed to parse go list output: %w", err)
+	}
+
+	if pkgInfo.Name != "main" {
+		return nil, fmt.Errorf("directory is not a main package (found package %s)", pkgInfo.Name)
+	}
+
+	return &pkgInfo, nil
+}
+
+// findMainFile finds the file containing the main function
+func findMainFile(files []string) (string, error) {
+	var mainFiles []string
+
+	for _, file := range files {
+		fset := token.NewFileSet()
+		node, err := parser.ParseFile(fset, file, nil, parser.ParseComments)
+		if err != nil {
+			continue // Skip files that can't be parsed
+		}
+
+		if hasMainFunction(node) {
+			mainFiles = append(mainFiles, file)
+		}
+	}
+
+	if len(mainFiles) == 0 {
+		return "", fmt.Errorf("no func main() found in any of the package files")
+	}
+
+	if len(mainFiles) > 1 {
+		return "", fmt.Errorf("multiple files define func main(): %v", mainFiles)
+	}
+
+	return mainFiles[0], nil
+}
+
+// writeAndExecutePackage creates a temporary overlay of the package and executes it
+func writeAndExecutePackage(node *ast.File, fset *token.FileSet, originalMainFile string, allPkgFiles []string, cpuFile, memFile string, web bool, enableCPU, enableMem bool, port string) error {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "peep-pkg-")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Write the instrumented main file
+	mainFileName := filepath.Base(originalMainFile)
+	tempMainFile := filepath.Join(tempDir, mainFileName)
+
+	out, err := os.Create(tempMainFile)
+	if err != nil {
+		return fmt.Errorf("failed to create temp main file: %w", err)
+	}
+	defer out.Close()
+
+	if err := printer.Fprint(out, fset, node); err != nil {
+		return fmt.Errorf("failed to write instrumented main file: %w", err)
+	}
+
+	// Copy all other package files
+	for _, file := range allPkgFiles {
+		if file == originalMainFile {
+			continue // Skip the main file as we've already written the instrumented version
+		}
+
+		fileName := filepath.Base(file)
+		tempFile := filepath.Join(tempDir, fileName)
+
+		// Read original file
+		src, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("failed to read file %s: %w", file, err)
+		}
+
+		// Write to temp location
+		if err := os.WriteFile(tempFile, src, 0644); err != nil {
+			return fmt.Errorf("failed to write temp file %s: %w", tempFile, err)
+		}
+	}
+
+	// Copy go.mod and go.sum files if they exist
+	pkgDir := filepath.Dir(originalMainFile)
+	goModFile := filepath.Join(pkgDir, "go.mod")
+	goSumFile := filepath.Join(pkgDir, "go.sum")
+
+	if _, err := os.Stat(goModFile); err == nil {
+		src, err := os.ReadFile(goModFile)
+		if err != nil {
+			return fmt.Errorf("failed to read go.mod: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(tempDir, "go.mod"), src, 0644); err != nil {
+			return fmt.Errorf("failed to write go.mod: %w", err)
+		}
+	}
+
+	if _, err := os.Stat(goSumFile); err == nil {
+		src, err := os.ReadFile(goSumFile)
+		if err != nil {
+			return fmt.Errorf("failed to read go.sum: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(tempDir, "go.sum"), src, 0644); err != nil {
+			return fmt.Errorf("failed to write go.sum: %w", err)
+		}
+	}
+
+	// Build go run command with all temp files
+	var tempFiles []string
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		return fmt.Errorf("failed to read temp directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".go" {
+			tempFiles = append(tempFiles, filepath.Join(tempDir, entry.Name()))
+		}
+	}
+
+	// Download dependencies if go.mod exists
+	if _, err := os.Stat(filepath.Join(tempDir, "go.mod")); err == nil {
+		cmd := exec.Command("go", "mod", "tidy")
+		cmd.Dir = tempDir
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to tidy dependencies: %w", err)
+		}
+	}
+
+	// Start live dashboard if requested (before running the program)
+	var dashboardCtx context.Context
+	var dashboardStop context.CancelFunc
+	if web {
+		fmt.Println("[prof] Starting live dashboard server...")
+		dashboardCtx, dashboardStop = signal.NotifyContext(context.Background(), os.Interrupt)
+		defer dashboardStop()
+
+		go func() {
+			startDashboardServer(dashboardCtx, port)
+		}()
+
+		// Give the dashboard time to start
+		time.Sleep(1 * time.Second)
+		fmt.Printf("[prof] Dashboard available at http://localhost:%s\n", port)
+	}
+
+	// Run the package
+	args := append([]string{"run"}, tempFiles...)
+	cmd := exec.Command("go", args...)
+	cmd.Dir = tempDir // Run from the temp directory
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	cmd.Env = os.Environ()
+
+	if enableCPU && enableMem {
+		fmt.Println("[prof] Running instrumented package with CPU and memory profiling...")
+	} else if enableMem {
+		fmt.Println("[prof] Running instrumented package with memory profiling...")
+	} else {
+		fmt.Println("[prof] Running instrumented package with CPU profiling...")
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("execution failed: %w", err)
+	}
+
+	if enableCPU && enableMem {
+		fmt.Printf("[prof] CPU profile saved to %s\n", cpuFile)
+		fmt.Printf("[prof] Memory profile saved to %s\n", memFile)
+	} else if enableMem {
+		fmt.Printf("[prof] Memory profile saved to %s\n", memFile)
+	} else {
+		fmt.Printf("[prof] CPU profile saved to %s\n", cpuFile)
+	}
+
+	// Keep dashboard running after program completion if requested
+	if web {
+		fmt.Printf("[prof] Program completed. Dashboard still running at http://localhost:%s\n", port)
+		fmt.Println("[prof] Press Ctrl+C to stop the dashboard server")
+		<-dashboardCtx.Done()
+		fmt.Println("[prof] Dashboard server stopped")
+	}
+
 	return nil
 }
 
@@ -677,7 +894,7 @@ func main() {
 	web := dash
 
 	if flag.NArg() != 1 {
-		fmt.Println("Usage: peep [-mem] [-cpu] [-cpu-out file] [-mem-out file] [-dash] [-port port] <main.go>")
+		fmt.Println("Usage: peep [-mem] [-cpu] [-cpu-out file] [-mem-out file] [-dash] [-port port] <main.go | package_dir>")
 		os.Exit(1)
 	}
 
@@ -685,7 +902,7 @@ func main() {
 	enableCPU := cpuOnly || (!memOnly && !cpuOnly)
 	enableMem := memOnly || (!memOnly && !cpuOnly)
 
-	sourceFile := flag.Arg(0)
+	arg := flag.Arg(0)
 
 	// Set default profile names if not specified
 	if cpuOutFile == "" && (enableCPU || (!memOnly && !cpuOnly)) {
@@ -695,14 +912,54 @@ func main() {
 		memOutFile = "mem.prof"
 	}
 
-	// Process the Go file
-	node, fset, err := processGoFile(sourceFile, cpuOutFile, memOutFile, enableCPU, enableMem, web)
+	// Check if argument is a file or directory
+	stat, err := os.Stat(arg)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to stat %s: %v", arg, err)
 	}
 
-	// Write and execute the instrumented file
-	if err := writeAndExecute(node, fset, cpuOutFile, memOutFile, web, enableCPU, enableMem, port); err != nil {
-		log.Fatal(err)
+	if stat.IsDir() {
+		// Package directory flow
+		pkgInfo, err := discoverPackage(arg)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Build absolute paths for all package files
+		var allFiles []string
+		for _, file := range pkgInfo.GoFiles {
+			allFiles = append(allFiles, filepath.Join(pkgInfo.Dir, file))
+		}
+		for _, file := range pkgInfo.CgoFiles {
+			allFiles = append(allFiles, filepath.Join(pkgInfo.Dir, file))
+		}
+
+		// Find the main file
+		mainFile, err := findMainFile(allFiles)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Process the main file
+		node, fset, err := processGoFile(mainFile, cpuOutFile, memOutFile, enableCPU, enableMem, web)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Write and execute the package
+		if err := writeAndExecutePackage(node, fset, mainFile, allFiles, cpuOutFile, memOutFile, web, enableCPU, enableMem, port); err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		// Single file flow (existing behavior)
+		node, fset, err := processGoFile(arg, cpuOutFile, memOutFile, enableCPU, enableMem, web)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Write and execute the instrumented file
+		if err := writeAndExecute(node, fset, cpuOutFile, memOutFile, web, enableCPU, enableMem, port); err != nil {
+			log.Fatal(err)
+		}
 	}
 }
