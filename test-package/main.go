@@ -2,11 +2,15 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
 )
 
 func main() {
 	fmt.Println("Starting test program...")
+
+	// Print command line arguments
+	fmt.Printf("Command line arguments: %v\n", os.Args)
 
 	// Use functions from other files
 	helper := NewHelper()

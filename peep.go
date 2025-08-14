@@ -586,7 +586,7 @@ func startDashboardServer(ctx context.Context, port string) {
 }
 
 // writeAndExecute writes the instrumented AST to a temp file and executes it
-func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile string, web bool, enableCPU, enableMem bool, port string) error {
+func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile string, web bool, enableCPU, enableMem bool, port string, programArgs []string) error {
 	// Check for nil input
 	if node == nil {
 		return fmt.Errorf("cannot write nil AST")
@@ -621,8 +621,9 @@ func writeAndExecute(node *ast.File, fset *token.FileSet, cpuFile, memFile strin
 		fmt.Printf("[prof] Dashboard available at http://localhost:%s\n", port)
 	}
 
-	// Run the instrumented file
-	cmd := exec.Command("go", "run", tempFile)
+	// Run the instrumented file with program arguments
+	args := append([]string{"run", tempFile}, programArgs...)
+	cmd := exec.Command("go", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -728,7 +729,7 @@ func findMainFile(files []string) (string, error) {
 }
 
 // writeAndExecutePackage creates a temporary overlay of the package and executes it
-func writeAndExecutePackage(node *ast.File, fset *token.FileSet, originalMainFile string, allPkgFiles []string, cpuFile, memFile string, web bool, enableCPU, enableMem bool, port string) error {
+func writeAndExecutePackage(node *ast.File, fset *token.FileSet, originalMainFile string, allPkgFiles []string, cpuFile, memFile string, web bool, enableCPU, enableMem bool, port string, programArgs []string) error {
 	// Create temp directory
 	tempDir, err := os.MkdirTemp("", "peep-pkg-")
 	if err != nil {
@@ -835,8 +836,9 @@ func writeAndExecutePackage(node *ast.File, fset *token.FileSet, originalMainFil
 		fmt.Printf("[prof] Dashboard available at http://localhost:%s\n", port)
 	}
 
-	// Run the package
+	// Run the package with program arguments
 	args := append([]string{"run"}, tempFiles...)
+	args = append(args, programArgs...)
 	cmd := exec.Command("go", args...)
 	cmd.Dir = tempDir // Run from the temp directory
 	cmd.Stdout = os.Stdout
@@ -893,16 +895,18 @@ func main() {
 
 	web := dash
 
-	if flag.NArg() != 1 {
-		fmt.Println("Usage: peep [-mem] [-cpu] [-cpu-out file] [-mem-out file] [-dash] [-port port] <main.go | package_dir>")
+	if flag.NArg() < 1 {
+		fmt.Println("Usage: peep [-mem] [-cpu] [-cpu-out file] [-mem-out file] [-dash] [-port port] <main.go | package_dir> [program_args...]")
 		os.Exit(1)
 	}
+
+	// Get the target (file or directory) and any remaining arguments for the program
+	target := flag.Arg(0)
+	programArgs := flag.Args()[1:] // All arguments after the target
 
 	// Determine profiling modes
 	enableCPU := cpuOnly || (!memOnly && !cpuOnly)
 	enableMem := memOnly || (!memOnly && !cpuOnly)
-
-	arg := flag.Arg(0)
 
 	// Set default profile names if not specified
 	if cpuOutFile == "" && (enableCPU || (!memOnly && !cpuOnly)) {
@@ -913,14 +917,14 @@ func main() {
 	}
 
 	// Check if argument is a file or directory
-	stat, err := os.Stat(arg)
+	stat, err := os.Stat(target)
 	if err != nil {
-		log.Fatalf("Failed to stat %s: %v", arg, err)
+		log.Fatalf("Failed to stat %s: %v", target, err)
 	}
 
 	if stat.IsDir() {
 		// Package directory flow
-		pkgInfo, err := discoverPackage(arg)
+		pkgInfo, err := discoverPackage(target)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -947,18 +951,18 @@ func main() {
 		}
 
 		// Write and execute the package
-		if err := writeAndExecutePackage(node, fset, mainFile, allFiles, cpuOutFile, memOutFile, web, enableCPU, enableMem, port); err != nil {
+		if err := writeAndExecutePackage(node, fset, mainFile, allFiles, cpuOutFile, memOutFile, web, enableCPU, enableMem, port, programArgs); err != nil {
 			log.Fatal(err)
 		}
 	} else {
 		// Single file flow (existing behavior)
-		node, fset, err := processGoFile(arg, cpuOutFile, memOutFile, enableCPU, enableMem, web)
+		node, fset, err := processGoFile(target, cpuOutFile, memOutFile, enableCPU, enableMem, web)
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		// Write and execute the instrumented file
-		if err := writeAndExecute(node, fset, cpuOutFile, memOutFile, web, enableCPU, enableMem, port); err != nil {
+		if err := writeAndExecute(node, fset, cpuOutFile, memOutFile, web, enableCPU, enableMem, port, programArgs); err != nil {
 			log.Fatal(err)
 		}
 	}

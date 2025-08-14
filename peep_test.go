@@ -169,7 +169,7 @@ func main() {
 	}
 
 	// Test writeAndExecute without web UI
-	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, false, "")
+	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, false, "", []string{})
 	if err != nil {
 		t.Fatalf("writeAndExecute failed: %v", err)
 	}
@@ -305,7 +305,7 @@ func main() {
 	}
 
 	// Test writeAndExecute with memory profiling only
-	err = writeAndExecute(node, fset, "", memProfileFile, false, false, true, "")
+	err = writeAndExecute(node, fset, "", memProfileFile, false, false, true, "", []string{})
 	if err != nil {
 		t.Fatalf("writeAndExecute failed: %v", err)
 	}
@@ -353,7 +353,7 @@ func main() {
 	}
 
 	// Test writeAndExecute with both profiling types
-	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, true, "")
+	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, true, "", []string{})
 	if err != nil {
 		t.Fatalf("writeAndExecute failed: %v", err)
 	}
@@ -690,7 +690,7 @@ func main() {
 	}
 
 	// Test writeAndExecute without web UI to avoid server startup
-	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, false, "")
+	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, false, "", []string{})
 	if err != nil {
 		t.Fatalf("writeAndExecute failed: %v", err)
 	}
@@ -771,7 +771,7 @@ func TestGenerateUniqueVarsUniqueness(t *testing.T) {
 
 func TestWriteAndExecuteWithInvalidAST(t *testing.T) {
 	// Test writeAndExecute with a nil AST
-	err := writeAndExecute(nil, token.NewFileSet(), "cpu.prof", "mem.prof", false, true, false, "")
+	err := writeAndExecute(nil, token.NewFileSet(), "cpu.prof", "mem.prof", false, true, false, "", []string{})
 	if err == nil {
 		t.Error("Expected error when writing nil AST")
 	}
@@ -887,5 +887,223 @@ func main() {
 		if !found {
 			t.Errorf("Expected to find import: %s", required)
 		}
+	}
+}
+
+func TestWriteAndExecuteWithProgramArguments(t *testing.T) {
+	// Create a simple Go program that prints its arguments
+	content := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	fmt.Printf("Program arguments: %v\n", os.Args)
+	
+	// Print each argument on a separate line
+	for i, arg := range os.Args {
+		fmt.Printf("Arg %d: %s\n", i, arg)
+	}
+}`
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.go")
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Process the file to get instrumented AST
+	cpuProfileFile := filepath.Join(tempDir, "test_cpu.prof")
+	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
+	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, false, false)
+	if err != nil {
+		t.Fatalf("Failed to process Go file: %v", err)
+	}
+
+	// Test writeAndExecute with program arguments
+	programArgs := []string{"-arg1", "value1", "-arg2", "value2", "--flag", "test"}
+	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, false, "", programArgs)
+	if err != nil {
+		t.Fatalf("writeAndExecute failed: %v", err)
+	}
+
+	// Wait a moment for file to be written
+	time.Sleep(200 * time.Millisecond)
+
+	// The profile file should be created in the working directory of the executed program
+	// which is the same as our test directory
+	if _, err := os.Stat(cpuProfileFile); os.IsNotExist(err) {
+		// Check if it was created in current directory instead
+		currentDirProfile := "test_cpu.prof"
+		if _, err := os.Stat(currentDirProfile); os.IsNotExist(err) {
+			t.Error("Expected CPU profile file to be created")
+		} else {
+			os.Remove(currentDirProfile) // cleanup
+		}
+	} else {
+		os.Remove(cpuProfileFile) // cleanup
+	}
+}
+
+func TestWriteAndExecuteWithEmptyProgramArguments(t *testing.T) {
+	// Test that writeAndExecute works correctly with empty program arguments
+	content := `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("test output")
+}`
+
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.go")
+
+	err := os.WriteFile(testFile, []byte(content), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Process the file to get instrumented AST
+	cpuProfileFile := filepath.Join(tempDir, "test_cpu.prof")
+	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
+	node, fset, err := processGoFile(testFile, cpuProfileFile, memProfileFile, true, false, false)
+	if err != nil {
+		t.Fatalf("Failed to process Go file: %v", err)
+	}
+
+	// Test writeAndExecute with empty program arguments
+	err = writeAndExecute(node, fset, cpuProfileFile, memProfileFile, false, true, false, "", []string{})
+	if err != nil {
+		t.Fatalf("writeAndExecute failed: %v", err)
+	}
+
+	// Wait a moment for file to be written
+	time.Sleep(200 * time.Millisecond)
+
+	// Check that CPU profile file was created
+	if _, err := os.Stat(cpuProfileFile); os.IsNotExist(err) {
+		// Check if it was created in current directory instead
+		currentDirProfile := "test_cpu.prof"
+		if _, err := os.Stat(currentDirProfile); os.IsNotExist(err) {
+			t.Error("Expected CPU profile file to be created")
+		} else {
+			os.Remove(currentDirProfile) // cleanup
+		}
+	} else {
+		os.Remove(cpuProfileFile) // cleanup
+	}
+}
+
+func TestWriteAndExecutePackageWithProgramArguments(t *testing.T) {
+	// Create a test package with multiple files
+	tempDir := t.TempDir()
+
+	// Create go.mod
+	goModContent := `module testpackage
+
+go 1.21
+`
+	err := os.WriteFile(filepath.Join(tempDir, "go.mod"), []byte(goModContent), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to create go.mod: %v", err)
+	}
+
+	// Create main.go
+	mainContent := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	fmt.Printf("Package arguments: %v\n", os.Args)
+	
+	// Print each argument on a separate line
+	for i, arg := range os.Args {
+		fmt.Printf("Package Arg %d: %s\n", i, arg)
+	}
+	
+	// Use helper function
+	helper := NewHelper()
+	helper.DoSomething()
+}`
+
+	err = os.WriteFile(filepath.Join(tempDir, "main.go"), []byte(mainContent), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to create main.go: %v", err)
+	}
+
+	// Create helper.go
+	helperContent := `package main
+
+import "fmt"
+
+type Helper struct{}
+
+func NewHelper() *Helper {
+	return &Helper{}
+}
+
+func (h *Helper) DoSomething() {
+	fmt.Println("Helper is doing something...")
+}`
+
+	err = os.WriteFile(filepath.Join(tempDir, "helper.go"), []byte(helperContent), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to create helper.go: %v", err)
+	}
+
+	// Discover the package
+	pkgInfo, err := discoverPackage(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to discover package: %v", err)
+	}
+
+	// Build absolute paths for all package files
+	var allFiles []string
+	for _, file := range pkgInfo.GoFiles {
+		allFiles = append(allFiles, filepath.Join(pkgInfo.Dir, file))
+	}
+
+	// Find the main file
+	mainFile, err := findMainFile(allFiles)
+	if err != nil {
+		t.Fatalf("Failed to find main file: %v", err)
+	}
+
+	// Process the main file
+	cpuProfileFile := filepath.Join(tempDir, "test_cpu.prof")
+	memProfileFile := filepath.Join(tempDir, "test_mem.prof")
+	node, fset, err := processGoFile(mainFile, cpuProfileFile, memProfileFile, true, false, false)
+	if err != nil {
+		t.Fatalf("Failed to process Go file: %v", err)
+	}
+
+	// Test writeAndExecutePackage with program arguments
+	programArgs := []string{"-package-arg1", "value1", "-package-arg2", "value2", "--package-flag", "test"}
+	err = writeAndExecutePackage(node, fset, mainFile, allFiles, cpuProfileFile, memProfileFile, false, true, false, "", programArgs)
+	if err != nil {
+		t.Fatalf("writeAndExecutePackage failed: %v", err)
+	}
+
+	// Wait a moment for file to be written
+	time.Sleep(200 * time.Millisecond)
+
+	// Check that CPU profile file was created
+	if _, err := os.Stat(cpuProfileFile); os.IsNotExist(err) {
+		// Check if it was created in current directory instead
+		currentDirProfile := "test_cpu.prof"
+		if _, err := os.Stat(currentDirProfile); os.IsNotExist(err) {
+			t.Error("Expected CPU profile file to be created")
+		} else {
+			os.Remove(currentDirProfile) // cleanup
+		}
+	} else {
+		os.Remove(cpuProfileFile) // cleanup
 	}
 }
