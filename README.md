@@ -1,3 +1,6 @@
+CURRENTLY BROKEN
+There's a bug that stops this from working when internal packages are used by the main dir. I'll fix it when I get a chance.
+
 # peep
 
 A Go profiling tool that automatically instruments your code with CPU and memory profiling.
